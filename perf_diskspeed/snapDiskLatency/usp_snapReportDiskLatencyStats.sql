@@ -116,27 +116,26 @@ BEGIN
         -- Query directly from sys.dm_io_virtual_file_stats without time span
         SET @SQL = N'
         SELECT 
-            CAST(GETDATE() AS SMALLDATETIME)                                 AS [DateTime],
-            N''Current State''                                               AS [Period],
+            FORMAT(GETDATE(), ''yyyy-MM-dd HH:mm'')                          AS [DateTime],
             DB_NAME([vfs].[database_id])                                     AS [Database],
             CASE 
                 WHEN [mf].[type_desc] = ''LOG'' THEN ''Transaction Log''
                 WHEN [mf].[type_desc] = ''ROWS'' THEN ''Data File''
                 ELSE [mf].[type_desc]
-            END                                                             AS [FileType],
+             END                                                            AS [FileType],
             -- Calculate average latencies per I/O operation (rounded to whole numbers)
             CASE 
                 WHEN [vfs].[num_of_reads] = 0 THEN 0
                 ELSE CAST(ROUND([vfs].[io_stall_read_ms] * 1.0 / [vfs].[num_of_reads], 0) AS INT)
-            END                                                             AS [AvgReadLatency_ms],
+             END                                                            AS [AvgReadLatency_ms],
             CASE 
                 WHEN [vfs].[num_of_writes] = 0 THEN 0
                 ELSE CAST(ROUND([vfs].[io_stall_write_ms] * 1.0 / [vfs].[num_of_writes], 0) AS INT)
-            END                                                             AS [AvgWriteLatency_ms],
+             END                                                            AS [AvgWriteLatency_ms],
             CASE 
                 WHEN ([vfs].[num_of_reads] + [vfs].[num_of_writes]) = 0 THEN 0
                 ELSE CAST(ROUND([vfs].[io_stall] * 1.0 / ([vfs].[num_of_reads] + [vfs].[num_of_writes]), 0) AS INT)
-            END                                                             AS [AvgTotalLatency_ms],
+             END                                                            AS [AvgTotalLatency_ms],
             [vfs].[num_of_reads]                                            AS [TotalReads],
             [vfs].[num_of_writes]                                           AS [TotalWrites],
             -- Add cumulative bytes and pages
@@ -154,9 +153,9 @@ BEGIN
                 ([vfs].[database_id] = 2 or [vfs].[database_id] > 4)
             AND DB_NAME([vfs].[database_id]) IS NOT NULL
             AND (@DatabaseName IS NULL OR DB_NAME([vfs].[database_id]) = @DatabaseName)
-            AND (@FileType IS NULL OR 
-                 (@FileType = ''DATA'' AND [mf].[type_desc] = ''ROWS'') OR
-                 (@FileType = ''LOG'' AND [mf].[type_desc] = ''LOG''))
+            AND (    @FileType IS NULL 
+                 OR (@FileType = ''DATA'' AND [mf].[type_desc] = ''ROWS'') 
+                 OR (@FileType = ''LOG'' AND [mf].[type_desc] = ''LOG''))
         GROUP BY 
             [vfs].[database_id],
             DB_NAME([vfs].[database_id]),
@@ -164,7 +163,7 @@ BEGIN
                 WHEN [mf].[type_desc] = ''LOG''    THEN ''Transaction Log''
                 WHEN [mf].[type_desc] = ''ROWS''   THEN ''Data File''
                 ELSE [mf].[type_desc]
-            END,
+             END,
             [vfs].[num_of_reads],
             [vfs].[num_of_writes],
             [vfs].[io_stall_read_ms],
@@ -178,16 +177,46 @@ BEGIN
         
         EXEC sp_executesql @SQL, N'@DatabaseName NVARCHAR(128), @FileType NVARCHAR(20)', @DatabaseName, @FileType;
     END
+
     ELSE
+
     BEGIN
-        -- Original historical analysis from stored data
-        SET @SQL = N'USE ' + QUOTENAME(@ArchiveDatabase) + ';' + CHAR(13) + CHAR(10);
 
         -- Original historical analysis from stored data
         SET @SQL = N'USE ' + QUOTENAME(@ArchiveDatabase) + ';' + CHAR(13) + CHAR(10);
 
         SET @SQL = @SQL + N'
-        WITH [SnapshotDiffs] AS (
+        WITH [TimeSeries] AS (
+            -- Generate complete time series from available snapshots
+            SELECT DISTINCT [snapshot_time]
+            FROM ' + @FullTableName + '
+            WHERE [snapshot_time] BETWEEN @StartDate AND @EndDate
+        ),
+
+        [DatabaseFileTypes] AS (
+            -- Get all unique database/filetype combinations that exist in the period
+            SELECT DISTINCT 
+                [database_name],
+                CASE 
+                    WHEN [file_type] = ''LOG''  THEN ''Transaction Log''
+                    WHEN [file_type] = ''ROWS'' THEN ''Data File''
+                    ELSE [file_type]
+                END AS [FileType]
+            FROM ' + @FullTableName + '
+            WHERE [snapshot_time] BETWEEN @StartDate AND @EndDate
+        ),
+
+        [CompleteMatrix] AS (
+            -- Cross join to ensure every time point has every database/filetype combination
+            SELECT 
+                ts.[snapshot_time],
+                df.[database_name],
+                df.[FileType]
+            FROM [TimeSeries] ts
+            CROSS JOIN [DatabaseFileTypes] df
+        ),
+
+        [SnapshotDiffs] AS (
             SELECT 
                 [curr].[snapshot_time],
                 [prev].[snapshot_time] AS [previous_snapshot_time],
@@ -196,19 +225,17 @@ BEGIN
                 [curr].[drive],
                 
                 -- Calculate differences from previous snapshot (delta values)
-                [curr].[num_of_reads]       - ISNULL([prev].[num_of_reads], 0)      AS [reads_diff],
-                [curr].[num_of_writes]      - ISNULL([prev].[num_of_writes], 0)     AS [writes_diff],
-                [curr].[io_stall_read_ms]   - ISNULL([prev].[io_stall_read_ms], 0)  AS [read_stall_diff],
-                [curr].[io_stall_write_ms]  - ISNULL([prev].[io_stall_write_ms], 0) AS [write_stall_diff],
-                [curr].[io_stall_total_ms]  - ISNULL([prev].[io_stall_total_ms], 0) AS [total_stall_diff],
-                [curr].[num_of_bytes_read]  - ISNULL([prev].[num_of_bytes_read], 0) AS [bytes_read_diff],
-                [curr].[num_of_bytes_written] - ISNULL([prev].[num_of_bytes_written], 0) AS [bytes_written_diff],
-                
-                -- Time difference in minutes between actual snapshots
-                DATEDIFF(MINUTE, [prev].[snapshot_time], [curr].[snapshot_time])    AS [time_diff_minutes]
+                [curr].[num_of_reads]         - ISNULL([prev].[num_of_reads], 0)            AS [reads_diff],
+                [curr].[num_of_writes]        - ISNULL([prev].[num_of_writes], 0)           AS [writes_diff],
+                [curr].[io_stall_read_ms]     - ISNULL([prev].[io_stall_read_ms], 0)        AS [read_stall_diff],
+                [curr].[io_stall_write_ms]    - ISNULL([prev].[io_stall_write_ms], 0)       AS [write_stall_diff],
+                [curr].[io_stall_total_ms]    - ISNULL([prev].[io_stall_total_ms], 0)       AS [total_stall_diff],
+                [curr].[num_of_bytes_read]    - ISNULL([prev].[num_of_bytes_read], 0)       AS [bytes_read_diff],
+                [curr].[num_of_bytes_written] - ISNULL([prev].[num_of_bytes_written], 0)    AS [bytes_written_diff]
                 
             FROM
                 ' + @FullTableName + ' AS [curr]
+
             LEFT JOIN 
                 ' + @FullTableName + ' AS [prev] ON [curr].[database_id]    = [prev].[database_id]
                                                             AND [curr].[file_id]        = [prev].[file_id]
@@ -225,61 +252,102 @@ BEGIN
             WHERE 
                     [curr].[snapshot_time] BETWEEN @StartDate AND @EndDate
                 AND [prev].[snapshot_time] IS NOT NULL -- Only records with previous snapshot
-        )';
+        ),
+
+        [AggregatedData] AS (
+            -- Aggregate data from snapshot differences
+            SELECT 
+                [snapshot_time],
+                [database_name],
+                CASE 
+                    WHEN [file_type] = ''LOG'' THEN ''Transaction Log''
+                    WHEN [file_type] = ''ROWS'' THEN ''Data File''
+                    ELSE [file_type]
+                 END                        AS [FileType],';
 
         -- split because of 4000 character limit
         SET @SQL = @SQL + N'
+                -- Calculate average latencies per I/O operation (rounded to whole numbers)
+                CASE 
+                    WHEN SUM([reads_diff]) = 0 THEN 0
+                    ELSE CAST(ROUND(SUM([read_stall_diff]) * 1.0 / SUM([reads_diff]), 0) AS INT)
+                 END                        AS [AvgReadLatency_ms],
+                CASE 
+                    WHEN SUM([writes_diff]) = 0 THEN 0
+                    ELSE CAST(ROUND(SUM([write_stall_diff]) * 1.0 / SUM([writes_diff]), 0) AS INT)
+                 END                        AS [AvgWriteLatency_ms],
+                CASE 
+                    WHEN (SUM([reads_diff]) + SUM([writes_diff])) = 0 THEN 0
+                    ELSE CAST(ROUND(SUM([total_stall_diff]) * 1.0 / (SUM([reads_diff]) + SUM([writes_diff])), 0) AS INT)
+                 END                        AS [AvgTotalLatency_ms],
+                SUM([reads_diff])           AS [TotalReads],
+                SUM([writes_diff])          AS [TotalWrites],
+                -- Add cumulative bytes and pages for historical analysis
+                CAST(ROUND(SUM([bytes_read_diff]) / 1024.0, 0) AS BIGINT) 
+                                            AS [TotalReadKB],
+                CAST(ROUND(SUM([bytes_written_diff]) / 1024.0, 0) AS BIGINT) 
+                                            AS [TotalWriteKB],
+                CAST(ROUND(SUM([bytes_read_diff]) / 8192.0, 0) AS BIGINT) 
+                                            AS [TotalReadPages],
+                CAST(ROUND(SUM([bytes_written_diff]) / 8192.0, 0) AS BIGINT) 
+                                            AS [TotalWritePages],
+                COUNT(*)                    AS [FileCount]
+                
+            FROM
+                [SnapshotDiffs]
+
+            WHERE 
+                    [reads_diff]        >= 0
+                AND [writes_diff]       >= 0
+                AND [read_stall_diff]   >= 0
+                AND [write_stall_diff]  >= 0
+
+            GROUP BY 
+                [snapshot_time],
+                [database_name],
+                CASE 
+                    WHEN [file_type] = ''LOG'' THEN ''Transaction Log''
+                    WHEN [file_type] = ''ROWS'' THEN ''Data File''
+                    ELSE [file_type]
+                END
+        )
+
         SELECT 
-            CAST(CAST([sd].[snapshot_time] AS DATETIME) AS SMALLDATETIME)    AS [DateTime],
-            CONCAT(''-'', [sd].[time_diff_minutes], '' min'')                    AS [Period],
-            [sd].[database_name]                                             AS [Database],
-            CASE 
-                WHEN [sd].[file_type] = ''LOG'' THEN ''Transaction Log''
-                WHEN [sd].[file_type] = ''ROWS'' THEN ''Data File''
-                ELSE [sd].[file_type]
-            END                                                             AS [FileType],
-            -- Calculate average latencies per I/O operation (rounded to whole numbers)
-            CASE 
-                WHEN SUM([sd].[reads_diff]) = 0 THEN 0
-                ELSE CAST(ROUND(SUM([sd].[read_stall_diff]) * 1.0 / SUM([sd].[reads_diff]), 0) AS INT)
-            END                                                             AS [AvgReadLatency_ms],
-            CASE 
-                WHEN SUM([sd].[writes_diff]) = 0 THEN 0
-                ELSE CAST(ROUND(SUM([sd].[write_stall_diff]) * 1.0 / SUM([sd].[writes_diff]), 0) AS INT)
-            END                                                             AS [AvgWriteLatency_ms],
-            CASE 
-                WHEN (SUM([sd].[reads_diff]) + SUM([sd].[writes_diff])) = 0 THEN 0
-                ELSE CAST(ROUND(SUM([sd].[total_stall_diff]) * 1.0 / (SUM([sd].[reads_diff]) + SUM([sd].[writes_diff])), 0) AS INT)
-            END                                                             AS [AvgTotalLatency_ms],
-            SUM([sd].[reads_diff])                                          AS [TotalReads],
-            SUM([sd].[writes_diff])                                         AS [TotalWrites],
-            -- Add cumulative bytes and pages for historical analysis
-            CAST(ROUND(SUM([sd].[bytes_read_diff]) / 1024.0, 0) AS BIGINT)  AS [TotalReadKB],
-            CAST(ROUND(SUM([sd].[bytes_written_diff]) / 1024.0, 0) AS BIGINT) AS [TotalWriteKB],
-            CAST(ROUND(SUM([sd].[bytes_read_diff]) / 8192.0, 0) AS BIGINT)  AS [TotalReadPages],
-            CAST(ROUND(SUM([sd].[bytes_written_diff]) / 8192.0, 0) AS BIGINT) AS [TotalWritePages],
-            COUNT(*)                                                        AS [FileCount]
-        FROM 
-            [SnapshotDiffs] AS [sd]
+            FORMAT(cm.[snapshot_time], ''yyyy-MM-dd HH:mm'')    AS [DateTime],
+            cm.[database_name]                                  AS [Database],
+            cm.[FileType],
+            
+            -- Use ISNULL to show 0 for missing data instead of NULL
+            ISNULL(ad.[AvgReadLatency_ms], 0)                   AS [AvgReadLatency_ms],
+            ISNULL(ad.[AvgWriteLatency_ms], 0)                  AS [AvgWriteLatency_ms],
+            ISNULL(ad.[AvgTotalLatency_ms], 0)                  AS [AvgTotalLatency_ms],
+            ISNULL(ad.[TotalReads], 0)                          AS [TotalReads],
+            ISNULL(ad.[TotalWrites], 0)                         AS [TotalWrites],
+            ISNULL(ad.[TotalReadKB], 0)                         AS [TotalReadKB],
+            ISNULL(ad.[TotalWriteKB], 0)                        AS [TotalWriteKB],
+            ISNULL(ad.[TotalReadPages], 0)                      AS [TotalReadPages],
+            ISNULL(ad.[TotalWritePages], 0)                     AS [TotalWritePages],
+            ISNULL(ad.[FileCount], 0)                           AS [FileCount]
+            
+        FROM
+            [CompleteMatrix] cm
+
+        LEFT JOIN 
+            [AggregatedData] ad ON cm.[snapshot_time] = ad.[snapshot_time]
+                               AND cm.[database_name] = ad.[database_name]
+                               AND cm.[FileType]      = ad.[FileType]
+
         WHERE 
-                [sd].[time_diff_minutes] > 0
-            AND (@DatabaseName IS NULL OR [sd].[database_name] = @DatabaseName)
-            AND (@FileType IS NULL OR 
-                 (@FileType = ''DATA'' AND [sd].[file_type] = ''ROWS'') OR
-                 (@FileType = ''LOG'' AND [sd].[file_type] = ''LOG''))
-        GROUP BY 
-            [sd].[snapshot_time],
-            [sd].[time_diff_minutes],
-            [sd].[database_name],
-            CASE 
-                WHEN [sd].[file_type] = ''LOG''    THEN ''Transaction Log''
-                WHEN [sd].[file_type] = ''ROWS''   THEN ''Data File''
-                ELSE [sd].[file_type]
-            END
+                (@DatabaseName IS NULL OR cm.[database_name] = @DatabaseName)
+            AND (        @FileType IS NULL 
+                    OR  (@FileType = ''DATA'' AND cm.[FileType] = ''Data File'')
+                    OR  (@FileType = ''LOG'' AND cm.[FileType] = ''Transaction Log'')
+                )
+
         ORDER BY
-            [sd].[snapshot_time],
-            [sd].[database_name],
-            [FileType];';
+            cm.[snapshot_time],
+            cm.[database_name],
+            cm.[FileType];';
 
         EXEC sp_executesql @SQL, N'@StartDate DATETIME2, @EndDate DATETIME2, @DatabaseName NVARCHAR(128), @FileType NVARCHAR(20)', @StartDate, @EndDate, @DatabaseName, @FileType;
     END

@@ -3,7 +3,7 @@
    Author         : Gabriel Köhl
    Site           : https://dbavonnebenan.de
    Repository     : https://github.com/gabrielkoehl/DBAScriptBox
-   Date           : July 2025
+    Version        : 1.0.0   2025-07-10
 
    Summary        : This stored procedure collects disk I/O latency statistics from SQL Server
 
