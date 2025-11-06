@@ -1,19 +1,40 @@
 /*
-   File Name      : IO_DATABASE_FILES.sql
-   Author         : Gabriel Köhl
-   Site           : https://dbavonnebenan.de
-   Date           : July 2025
+================================================================================
+SCRIPT:  IO_DATABASE_FILES.sql
+AUTHOR:  Gabriel Köhl
+WEBSITE: https://dbavonnebenan.de
+GITHUB:  https://github.com/gabrielkoehl/DBAScriptBox
 
-   Summary        : SQL Server IO Performance Analysis
+DESCRIPTION:
+    IO performance analysis for all SQL Server database files.
+    Provides detailed statistics on:
+    - Read/Write IO volumes (GB) and operation counts
+    - Read/Write distribution percentages
+    - Average IO sizes (KB) per operation type
+    - IO latency metrics (ms) for reads, writes, and overall
+    - IOPS calculations (average and estimated peak)
+    - Performance status assessment based on latency thresholds
+    
+    Helps identify:
+    - IO bottlenecks and slow storage subsystems
+    - Files with excessive latency
+    - IO patterns and workload characteristics
+    - Storage performance issues per database file
 
-   Description    : This script analyzes the IO performance of SQL Server database files.
-                    It retrieves statistics on read and write operations, average IO sizes,
+HISTORY:
+    - 07.2025 - Initial release
 
-   Usage          : RUN
+USAGE:
+    Execute directly in SSMS or Azure Data Studio
+    Works on SQL Server 2012+ (all editions)
+    No parameters required
+    Statistics are cumulative since last SQL Server restart
 
-   This script is provided "as is" without warranty of any kind.
-   You are free to use, modify, and distribute this script as you wish.
-   No liability is assumed for any damages resulting from its use.
+DISCLAIMER:
+    This script is provided "as is" without warranty of any kind.
+    Use at your own risk. The author assumes no responsibility for
+    any damages or issues that may arise from using this script.
+================================================================================
 */
 
 
@@ -102,7 +123,7 @@ SELECT
     CASE
         WHEN FileType = 'ROWS' AND AvgReadLatency_ms    > 20 THEN 'High Read Latency'
         WHEN FileType = 'ROWS' AND AvgWriteLatency_ms   > 10 THEN 'High Write Latency'
-        WHEN FileType = 'LOG' AND AvgWriteLatency_ms    > 5  THEN 'High Log Write Latency'
+        WHEN FileType = 'LOG'  AND AvgWriteLatency_ms   > 5  THEN 'High Log Write Latency'
         ELSE 'OK'
     END as PerformanceStatus,
     CURRENT_TIMESTAMP
