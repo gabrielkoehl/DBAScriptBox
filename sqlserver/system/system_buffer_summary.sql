@@ -12,8 +12,7 @@ DESCRIPTION:
     - Buffer Cache Hit Ratio
     - OS Available Commit Limit
     - Min/Max Server Memory configuration
-    - Top 5 Memory Clerks by allocated memory
-    
+
     Helps identify memory pressure, configuration issues, and memory distribution
     across different SQL Server components.
 
@@ -24,7 +23,7 @@ USAGE:
     Execute directly in SSMS or Azure Data Studio
     Works on SQL Server 2012+ (all editions)
     No parameters required
-    
+
 DISCLAIMER:
     This script is provided "as is" without warranty of any kind.
     Use at your own risk. The author assumes no responsibility for
@@ -54,7 +53,7 @@ FROM
 CROSS JOIN
     sys.dm_os_process_memory opm
 CROSS JOIN
-    (SELECT committed_target_kb / 1024 AS cntr_value 
+    (SELECT committed_target_kb / 1024 AS cntr_value
      FROM sys.dm_os_sys_info) pc_target
 CROSS JOIN
     (SELECT cntr_value FROM sys.dm_os_performance_counters
