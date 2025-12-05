@@ -18,7 +18,6 @@ Everybody has their own toolbox – if you find something useful here, feel free
 
 | File | Description | Last Modified |
 |------|-------------|---------------|
-| [solution/get-SnapBlockEvents/](solution/get-SnapBlockEvents/) | Extended Events based blocking detection and reporting | 25/11 |
 | [solution/snapDiskLatency/](solution/snapDiskLatency/) | Disk performance testing with DISKSPD and latency monitoring | 25/12 |
 | [sqlserver/security/security_list_all_users_on_DB_w_role.sql](sqlserver/security/security_list_all_users_on_DB_w_role.sql) | Lists all database users with their roles | 25/12 |
 | [sqlserver/security/security_list_logins_wServerRole.sql](sqlserver/security/security_list_logins_wServerRole.sql) | Lists all server logins with their server roles (implicit and explicit) | 25/12 |
