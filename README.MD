@@ -23,8 +23,9 @@ Everybody has their own toolbox – if you find something useful here, feel free
 | [sqlserver/security/security_list_logins_wServerRole.sql](sqlserver/security/security_list_logins_wServerRole.sql) | Lists all server logins with their server roles (implicit and explicit) | 25/12 |
 | [sqlserver/system/system_buffer_by_db.sql](sqlserver/system/system_buffer_by_db.sql) | Shows buffer cache usage per database | 25/11 |
 | [sqlserver/system/system_buffer_summary.sql](sqlserver/system/system_buffer_summary.sql) | Summary of buffer pool statistics | 25/12 |
-| [windows/security/security_createGMSA.ps1](windows/security/security_createGMSA.ps1) | Function for managing Group Managed Service Accounts | 26/01 |
-| [windows/security/security_setSqlLocalSec.ps1](windows/security/security_setSqlLocalSec.ps1) | Function for managing Local Security Policies | 26/01 |
-| [windows/security/security_setSqlSpn.ps1](windows/security/security_setSqlSpn.ps1) | Function for managing Service Principal Names | 26/01 |
+| [windows/security/security_createGMSA.ps1](windows/security/security_createGMSA.ps1) | Function for managing Group Managed Service Accounts | 26/02 |
+| [windows/security/security_setSqlLocalSec.ps1](windows/security/security_setSqlLocalSec.ps1) | Function for managing Local Security Policies | 26/02 |
+| [windows/security/security_setSqlSpn.ps1](windows/security/security_setSqlSpn.ps1) | Function for managing Service Principal Names | 26/02 |
+| [windows/system/cluster_manageSQLCluster.ps1](windows/system/cluster_manageSQLCluster.ps1) | Function for managing Windows Server Failover Cluster | 26/02 |
 | [windows/system/get-snapRebootHistory.ps1](windows/system/get-snapRebootHistory.ps1) | Shows Windows OS Reboots and Reasons | 25/12 |
 | [windows/winevent/get-snapWinEvents.ps1](windows/winevent/get-snapWinEvents.ps1) | Simple solution for quick and easy list and browse windows events | 25/11 |
