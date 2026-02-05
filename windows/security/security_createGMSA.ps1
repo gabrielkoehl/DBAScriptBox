@@ -1,23 +1,24 @@
 <#
 .SYNOPSIS
-    Creates and configures Group Managed Service Accounts (gMSA) for SQL Server services
+    Creates and configures Group Managed Service Accounts (gMSA) in Active Directory
 .DESCRIPTION
     Automates the creation of gMSA accounts in Active Directory including:
     - Creating security groups for server access control (optional)
-    - Creating gMSA accounts for SQL Server Engine and/or Agent
+    - Creating gMSA accounts
     - Installing gMSA accounts on local server (optional, requires restart)
     - Removing gMSA accounts from AD
     - Logging all operations to file (optional)
-    
+
     IMPORTANT: Install operations require elevated privileges and must be run separately
     from account creation as they may require a system restart.
-    
-    NOTE: Uninstall-ADServiceAccount does not reliably remove gMSA from local cache due to 
+
+    NOTE: Uninstall-ADServiceAccount does not reliably remove gMSA from local cache due to
     Windows LSA limitations. Function removed
-.PARAMETER EngineAccountName
-    Name for SQL Server Engine gMSA account (without $ suffix)
-.PARAMETER AgentAccountName
-    Name for SQL Server Agent gMSA account (without $ suffix)
+.PARAMETER AccountName
+    Array of account definitions. Each element can be:
+    - String: Account name only (no description)
+    - Array: [Name, Description]
+    Example: @("gmsa-svc1", @("gmsa-svc2", "Web Service Account"))
 .PARAMETER SecurityGroupName
     Name of AD security group that contains allowed servers (without $ suffix)
 .PARAMETER ServerNames
@@ -31,34 +32,27 @@
 .PARAMETER SecurityGroupOU
     Optional OU path for security group (e.g., "OU=ServiceAccounts,DC=domain,DC=com")
 .PARAMETER SecurityGroupDescription
-    Optional description for security group (default: "gMSA security group for SQL Server computers")
-.PARAMETER EngineAccountDescription
-    Optional description for Engine gMSA account (default: "SQL Server gMSA account for <AccountName>")
-.PARAMETER AgentAccountDescription
-    Optional description for Agent gMSA account (default: "SQL Server gMSA account for <AccountName>")
+    Optional description for security group (default: "gMSA security group for computers")
 .PARAMETER InstallLocally
     Switch to install created gMSA accounts on local server (REQUIRES ADMIN RIGHTS, SEPARATE EXECUTION)
 .PARAMETER InitializeKDS
     Switch to initialize KDS Root Key (only needed once per AD forest)
 .PARAMETER DropGmsa
-    Switch to remove gMSA accounts from Active Directory
+    Switch to remove gMSA accounts from Active Directory. Local removement not working ATM (2DO)
 .PARAMETER LogPath
     Optional path to log file. If not specified, only console output is generated.
 .EXAMPLE
-    .\security_createGMSA.ps1 -EngineAccountName "g-engine-dev22a" -AgentAccountName "g-agent-dev22a" -SecurityGroupName "SQL_CL_DEV22A"
-    Creates gMSA accounts using existing security group
+    .\security_createGMSA.ps1 -InitializeKDS -LogPath "C:\Temp\KDS_Init.log"
+    Initializes KDS Root Key (required once per AD forest)
 .EXAMPLE
-    .\security_createGMSA.ps1 -EngineAccountName "g-engine-dev22a" -SecurityGroupName "SQL_CL_DEV22A" -ServerNames "DEV-NODE1","DEV-NODE2" -CreateSecurityGroup
-    Creates Engine gMSA and new security group with specified servers
+    .\security_createGMSA.ps1 -AccountName @(@("g-LAB22A-oltp", "SQL Engine"), @("g-LAB22A-agnt", "SQL Agent")) -SecurityGroupName "SQL_LAB_CL01" -ServerNames "LAB-NODE01","LAB-NODE02" -CreateSecurityGroup
+    Creates gMSA accounts for AlwaysOn cluster with new security group
 .EXAMPLE
-    .\security_createGMSA.ps1 -InstallLocally -EngineAccountName "g-engine-dev22a" -AgentAccountName "g-agent-dev22a"
-    Installs existing gMSA accounts on local server (requires restart, admin rights required)
+    .\security_createGMSA.ps1 -InstallLocally -AccountName "g-LAB22A-oltp","g-LAB22A-agnt"
+    Installs gMSA accounts on local server (requires restart, admin rights required)
 .EXAMPLE
-    .\security_createGMSA.ps1 -DropGmsa -EngineAccountName "g-engine-dev22a" -AgentAccountName "g-agent-dev22a" -LogPath "C:\Logs\gMSA_Remove.log"
-    Removes gMSA accounts from Active Directory
-.EXAMPLE
-    .\security_createGMSA.ps1 -InitializeKDS -LogPath "C:\Logs\KDS_Init.log"
-    Initializes KDS Root Key and logs operation to file
+    .\security_createGMSA.ps1 -DropGmsa -AccountName "g-LAB22A-oltp" -LogPath "C:\Temp\gMSA_Remove.log"
+    Removes gMSA account from Active Directory
 .NOTES
     File Name  : security_createGMSA.ps1
     Author     : Gabriel Köhl
@@ -67,6 +61,8 @@
     HISTORY
     - 25.05.2024 - Init
     - 30.01.2026 - Updated with different functions
+    - 04.02.2026 - Removed Sql Server Dependencies
+
     Disclaimer: This script is provided "as is" without warranty of any kind.
                 Use at your own risk. The author assumes no responsibility for
                 any damages or issues that may arise from using this script.
@@ -76,9 +72,7 @@
     - Local Administrator rights ONLY for -InstallLocally operation
     - ActiveDirectory PowerShell module
     - KDS Root Key must be initialized (use -InitializeKDS once per forest)
-    - For production: Wait 10 hours after KDS initialization
-    - For testing: Use Add-KdsRootKey -EffectiveTime (Get-Date).AddHours(-10)
-    
+
     ADMIN RIGHTS:
     - Account creation/removal: Domain admin or delegated AD permissions
     - Install locally: Local administrator rights required
@@ -90,12 +84,7 @@ param (
     [Parameter(ParameterSetName='CreateAccounts')]
     [Parameter(ParameterSetName='DropAccounts')]
     [Parameter(ParameterSetName='InstallOnly')]
-    [string]    $EngineAccountName,
-
-    [Parameter(ParameterSetName='CreateAccounts')]
-    [Parameter(ParameterSetName='DropAccounts')]
-    [Parameter(ParameterSetName='InstallOnly')]
-    [string]    $AgentAccountName,
+    [object[]]  $AccountName,
 
     [Parameter(Mandatory=$true, ParameterSetName='CreateAccounts')]
     [string]    $SecurityGroupName,
@@ -118,12 +107,6 @@ param (
 
     [Parameter(ParameterSetName='CreateAccounts')]
     [string]    $SecurityGroupDescription,
-
-    [Parameter(ParameterSetName='CreateAccounts')]
-    [string]    $EngineAccountDescription,
-
-    [Parameter(ParameterSetName='CreateAccounts')]
-    [string]    $AgentAccountDescription,
 
     [Parameter(Mandatory=$true, ParameterSetName='InstallOnly')]
     [switch]    $InstallLocally,
@@ -150,10 +133,10 @@ function Write-Log {
         [string]$Message,
         [string]$Level = "INFO"
     )
-    
+
     $timestamp  = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logMessage = "[$timestamp] [$Level] $Message"
-    
+
     if ($LogPath) {
         Add-Content -Path $LogPath -Value $logMessage
     }
@@ -172,24 +155,21 @@ function Initialize-KDSRootKey {
 
         Write-Host "Checking existing KDS Root Keys..." -ForegroundColor Cyan
         Write-Log "Checking existing KDS Root Keys"
-        
-        $existingKeys = Get-KdsRootKey
 
-        if ($existingKeys) {
-            Write-Host "KDS Root Key already exists:" -ForegroundColor Green
+        $existingKey = Get-KdsRootKey
+
+        if ($existingKey) {
+            Write-Host "KDS Root Key already exists." -ForegroundColor Green
             Write-Log "KDS Root Key already exists"
-            $existingKeys | Select-Object EffectiveTime, CreationTime, DomainController | Format-Table
             return $true
         }
 
         Write-Host "Creating KDS Root Key..." -ForegroundColor Cyan
-        Write-Log "Creating KDS Root Key"
-        Write-Warning "In production environments, there's a 10-hour replication delay."
-        Write-Warning "For testing, use: Add-KdsRootKey -EffectiveTime (Get-Date).AddHours(-10)"
+        Write-Log "Creating KDS Root Key..."
 
-        $key = Add-KdsRootKey -EffectiveImmediately
-        Write-Host "KDS Root Key created successfully. KeyId: $($key.KeyId)" -ForegroundColor Green
-        Write-Log "KDS Root Key created successfully. KeyId: $($key.KeyId)"
+        Add-KdsRootKey -EffectiveTime (Get-Date).AddHours(-10) | Out-Null
+        Write-Host "KDS Root Key created successfully." -ForegroundColor Green
+        Write-Log "KDS Root Key created successfully."
 
         return $true
 
@@ -201,7 +181,6 @@ function Initialize-KDSRootKey {
 
     }
 }
-
 function New-gMSASecurityGroup {
     param (
         [string]    $GroupName,
@@ -223,7 +202,7 @@ function New-gMSASecurityGroup {
         Write-Host "Creating security group '$GroupName'..." -ForegroundColor Cyan
         Write-Log "Creating security group '$GroupName' with Description: '$Description', OU: '$OU'"
 
-        $defaultDescription = "gMSA security group for SQL Server computers"
+        $defaultDescription = "gMSA security group for computers"
         $groupDescription   = if ($Description) { $Description } else { $defaultDescription }
 
         $newGroupParams = @{
@@ -267,6 +246,7 @@ function New-gMSASecurityGroup {
         $groupMembers = Get-ADGroupMember -Identity $GroupName
 
         if ($groupMembers) {
+
             foreach ($m in $groupMembers) {
                 Write-Host "  $($m.Name) ($($m.ObjectClass))" -ForegroundColor White
             }
@@ -303,6 +283,7 @@ function Test-SecurityGroup {
             Write-Log "Security group '$GroupName' validated"
 
             $members = Get-ADGroupMember -Identity $GroupName
+
             if ($members) {
 
                 Write-Host "Group members:" -ForegroundColor Cyan
@@ -334,11 +315,11 @@ function Test-SecurityGroup {
 
 function New-gMSAServiceAccount {
     param (
-        [string]$AccountName,
-        [string]$DnsHostName,
-        [string]$PrincipalsGroup,
-        [int]$PasswordInterval,
-        [string]$Description
+        [string]    $AccountName,
+        [string]    $DnsHostName,
+        [string]    $PrincipalsGroup,
+        [int]       $PasswordInterval,
+        [string]    $Description
     )
 
     try {
@@ -356,20 +337,23 @@ function New-gMSAServiceAccount {
         }
 
         Write-Host "Creating gMSA account '$AccountName'..." -ForegroundColor Cyan
-        
-        $defaultDescription = "SQL Server gMSA account for $AccountName"
-        $accountDescription = if ($Description) { $Description } else { $defaultDescription }
-        
-        Write-Log "Creating gMSA account '$AccountName' with Description: '$accountDescription', DNS: '$DnsHostName', Group: '$PrincipalsGroup', PasswordInterval: $PasswordInterval days"
+        Write-Log "Creating gMSA account '$AccountName' with Description: '$Description', DNS: '$DnsHostName', Group: '$PrincipalsGroup', PasswordInterval: $PasswordInterval days"
 
-        New-ADServiceAccount -Name $AccountName `
-                             -PrincipalsAllowedToRetrieveManagedPassword $PrincipalsGroup `
-                             -Enabled $true `
-                             -DNSHostName $DnsHostName `
-                             -SamAccountName $AccountName `
-                             -ManagedPasswordIntervalInDays $PasswordInterval `
-                             -Description $accountDescription `
-                             -ErrorAction Stop
+        $newAccountParams = @{
+            Name                                        = $AccountName
+            PrincipalsAllowedToRetrieveManagedPassword  = $PrincipalsGroup
+            Enabled                                     = $true
+            DNSHostName                                 = $DnsHostName
+            SamAccountName                              = $AccountName
+            ManagedPasswordIntervalInDays               = $PasswordInterval
+            ErrorAction                                 = 'Stop'
+        }
+
+        if ($Description) {
+            $newAccountParams['Description'] = $Description
+        }
+
+        New-ADServiceAccount @newAccountParams
 
         Write-Host "gMSA account '$AccountName' created successfully." -ForegroundColor Green
         Write-Log "gMSA account '$AccountName' created successfully"
@@ -388,17 +372,30 @@ function New-gMSAServiceAccount {
 
 function Install-gMSALocally {
     param (
-        [string[]]$AccountNames
+        [object[]]  $AccountDefinitions
     )
 
     try {
 
         Write-Host "`nInstalling gMSA accounts on local server..." -ForegroundColor Cyan
-        Write-Log "Installing gMSA accounts locally: $($AccountNames -join ', ')"
+
+        # Extract account names from definitions
+        $accountNames = @()
+        foreach ($def in $AccountDefinitions) {
+
+            if ($def -is [array]) {
+                $accountNames += $def[0]
+            } else {
+                $accountNames += $def
+            }
+
+        }
+
+        Write-Log "Installing gMSA accounts locally: $($accountNames -join ', ')"
 
         $installResults = @()
 
-        foreach ($accountName in $AccountNames) {
+        foreach ($accountName in $accountNames) {
 
             $accountName = $accountName.TrimEnd('$')
             Write-Host "  Processing: $accountName..." -NoNewline
@@ -452,7 +449,7 @@ function Install-gMSALocally {
             try {
 
                 Install-ADServiceAccount -Identity $accountName -Force -ErrorAction Stop
-                
+
                 # Verify installation
                 Start-Sleep -Seconds 1
                 $verifyInstalled = $false
@@ -462,11 +459,12 @@ function Install-gMSALocally {
                     $verifyResult    = Test-ADServiceAccount -Identity $accountName -ErrorAction Stop
                     $verifyInstalled = ($verifyResult -eq $true)
 
-                }
-                catch {
+                } catch {
+
                     $verifyInstalled = $false
+
                 }
-                
+
                 if ($verifyInstalled) {
 
                     Write-Host " OK" -ForegroundColor Green
@@ -494,7 +492,7 @@ function Install-gMSALocally {
                 Write-Host " ERROR" -ForegroundColor Red
                 Write-Host "    $errorMsg" -ForegroundColor Red
                 Write-Log "Error installing gMSA account '$accountName': $errorMsg" -Level "ERROR"
-                
+
                 $installResults += [PSCustomObject]@{
                     Account = $accountName
                     Status  = "Failed"
@@ -514,6 +512,7 @@ function Install-gMSALocally {
                 "AlreadyInstalled" { "Yellow" }
                 default { "Red" }
             }
+
             Write-Host "  $($result.Account): $($result.Status)" -ForegroundColor $color
 
         }
@@ -543,18 +542,30 @@ function Install-gMSALocally {
 
 function Remove-gMSAServiceAccount {
     param (
-        [string[]]$AccountNames
+        [object[]]  $AccountDefinitions
     )
 
     $removedAccounts = @()
 
-    foreach ($accountName in $AccountNames) {
+    # Extract account names from definitions
+    $accountNames = @()
+    foreach ($def in $AccountDefinitions) {
+
+        if ($def -is [array]) {
+            $accountNames += $def[0]
+        } else {
+            $accountNames += $def
+        }
+
+    }
+
+    foreach ($accountName in $accountNames) {
 
         try {
 
             $accountName = $accountName.TrimEnd('$')
             $account = Get-ADServiceAccount -Filter "Name -eq '$accountName'" -ErrorAction SilentlyContinue
-            
+
             if (-not $account) {
                 Write-Host "gMSA account '$accountName' not found in AD." -ForegroundColor Yellow
                 Write-Log "gMSA account '$accountName' not found for removal" -Level "WARN"
@@ -568,7 +579,7 @@ function Remove-gMSAServiceAccount {
             Remove-ADServiceAccount -Identity $accountName -Confirm:$false -ErrorAction Stop
             Write-Host " OK" -ForegroundColor Green
             Write-Log "gMSA account '$accountName' removed from AD"
-            
+
             $removedAccounts += $accountName
 
         } catch {
@@ -580,6 +591,28 @@ function Remove-gMSAServiceAccount {
     }
 
     return $removedAccounts
+}
+
+function ConvertTo-AccountDefinitions {
+    param (
+        [object[]]$InputArray
+    )
+
+    $definitions = @()
+
+    foreach ($item in $InputArray) {
+
+        if ($item -is [array]) {
+            # Already array format [Name, Description]
+            $definitions += ,@($item[0].TrimEnd('$'), $item[1])
+        } else {
+            # Simple string, no description
+            $definitions += ,@($item.TrimEnd('$'), "")
+        }
+
+    }
+
+    return $definitions
 }
 
 #endregion
@@ -594,13 +627,13 @@ if ($LogPath) {
     if ($logDir -and -not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force | Out-Null
     }
-    
+
     $separator = "=" * 80
     Add-Content -Path $LogPath -Value "`n$separator"
     Add-Content -Path $LogPath -Value "Execution started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     Add-Content -Path $LogPath -Value "ParameterSet: $($PSCmdlet.ParameterSetName)"
     Add-Content -Path $LogPath -Value $separator
-    
+
     Write-Log "Script parameters: $($PSBoundParameters | Out-String)"
 
 }
@@ -648,7 +681,7 @@ if ($PSCmdlet.ParameterSetName -eq 'InstallOnly') {
     Write-Host "===============================" -ForegroundColor Cyan
     Write-Log "=== gMSA Local Installation ==="
 
-    if (-not $EngineAccountName -and -not $AgentAccountName) {
+    if (-not $AccountName -or $AccountName.Count -eq 0) {
 
         Write-Host "Error: At least one account name must be specified." -ForegroundColor Red
         Write-Log "Error: No account names specified for installation" -Level "ERROR"
@@ -656,19 +689,16 @@ if ($PSCmdlet.ParameterSetName -eq 'InstallOnly') {
 
     }
 
-    $accountsToInstall = @()
-    if ($EngineAccountName) { $accountsToInstall += $EngineAccountName }
-    if ($AgentAccountName)  { $accountsToInstall += $AgentAccountName }
-
     Write-Host "`nAccounts to install:" -ForegroundColor Cyan
 
-    foreach ($acc in $accountsToInstall) {
-        Write-Host "  - $acc" -ForegroundColor White
+    foreach ($acc in $AccountName) {
+        $displayName = if ($acc -is [array]) { $acc[0] } else { $acc }
+        Write-Host "  - $displayName" -ForegroundColor White
     }
 
     Write-Host ""
 
-    $success = Install-gMSALocally -AccountNames $accountsToInstall
+    $success = Install-gMSALocally -AccountDefinitions $AccountName
 
     if ($success) {
         Write-Host "`nOperation completed successfully." -ForegroundColor Green
@@ -688,11 +718,11 @@ if ($PSCmdlet.ParameterSetName -eq 'InstallOnly') {
 # Drop Accounts Operation
 if ($PSCmdlet.ParameterSetName -eq 'DropAccounts') {
 
-    Write-Host "=== SQL Server gMSA Account Removal ===" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Log "=== SQL Server gMSA Account Removal ==="
+    Write-Host "=== gMSA Account Removal ===" -ForegroundColor Cyan
+    Write-Host "============================" -ForegroundColor Cyan
+    Write-Log "=== gMSA Account Removal ==="
 
-    if (-not $EngineAccountName -and -not $AgentAccountName) {
+    if (-not $AccountName -or $AccountName.Count -eq 0) {
 
         Write-Host "Error: At least one account name must be specified." -ForegroundColor Red
         Write-Log "Error: No account names specified for removal" -Level "ERROR"
@@ -701,14 +731,11 @@ if ($PSCmdlet.ParameterSetName -eq 'DropAccounts') {
 
     }
 
-    $accountsToRemove = @()
-    if ($EngineAccountName) { $accountsToRemove += $EngineAccountName }
-    if ($AgentAccountName)  { $accountsToRemove += $AgentAccountName }
-
     Write-Host "`nAccounts to remove from AD:" -ForegroundColor Cyan
 
-    foreach ($acc in $accountsToRemove) {
-        Write-Host "  - $acc" -ForegroundColor White
+    foreach ($acc in $AccountName) {
+        $displayName = if ($acc -is [array]) { $acc[0] } else { $acc }
+        Write-Host "  - $displayName" -ForegroundColor White
     }
 
     Write-Host ""
@@ -716,7 +743,7 @@ if ($PSCmdlet.ParameterSetName -eq 'DropAccounts') {
     Write-Host "      due to Windows LSA limitations. This is harmless and does not affect AD removal." -ForegroundColor Yellow
     Write-Host ""
 
-    $removedAccounts = Remove-gMSAServiceAccount -AccountNames $accountsToRemove
+    $removedAccounts = Remove-gMSAServiceAccount -AccountDefinitions $AccountName
 
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
     if ($removedAccounts.Count -gt 0) {
@@ -737,15 +764,15 @@ if ($PSCmdlet.ParameterSetName -eq 'DropAccounts') {
     Write-Host "`nOperation completed." -ForegroundColor Green
     Write-Log "Operation completed"
     exit 0
-    
+
 }
 
 # Create Accounts Workflow
-Write-Log "=== SQL Server gMSA Account Creation ==="
+Write-Log "=== gMSA Account Creation ==="
 
-if (-not $EngineAccountName -and -not $AgentAccountName) {
+if (-not $AccountName -or $AccountName.Count -eq 0) {
 
-    Write-Host "Error: At least one account name (Engine or Agent) must be specified." -ForegroundColor Red
+    Write-Host "Error: At least one account name must be specified." -ForegroundColor Red
     Write-Log "Error: No account names specified" -Level "ERROR"
     exit 1
 
@@ -765,24 +792,37 @@ if (-not $DnsDomain) {
 
 }
 
-Write-Host "=== SQL Server gMSA Account Creation ===" -ForegroundColor Cyan
-Write-Host "=========================================" -ForegroundColor Cyan
+# Convert AccountName to normalized definitions
+$accountDefinitions = ConvertTo-AccountDefinitions -InputArray $AccountName
+
+Write-Host "=== gMSA Account Creation ===" -ForegroundColor Cyan
+Write-Host "=============================" -ForegroundColor Cyan
 
 Write-Host "`nConfiguration:" -ForegroundColor Cyan
 Write-Host "  Security Group: $SecurityGroupName" -ForegroundColor White
-if ($EngineAccountName) { Write-Host "  Engine Account: $EngineAccountName" -ForegroundColor White }
-if ($AgentAccountName) { Write-Host "  Agent Account:  $AgentAccountName" -ForegroundColor White }
+Write-Host "  Accounts:" -ForegroundColor White
+
+foreach ($def in $accountDefinitions) {
+
+    $displayText = "    - $($def[0])"
+    if ($def[1]) { $displayText += " ($($def[1]))" }
+    Write-Host $displayText -ForegroundColor White
+
+}
+
 Write-Host "  DNS Domain:     $DnsDomain" -ForegroundColor White
 Write-Host "  Password Days:  $PasswordIntervalDays" -ForegroundColor White
+
 if ($ServerNames) { Write-Host "  Servers:        $($ServerNames -join ', ')" -ForegroundColor White }
 if ($SecurityGroupOU) { Write-Host "  Group OU:       $SecurityGroupOU" -ForegroundColor White }
+
 Write-Host ""
 
 Write-Host "Step 1: Validate/Create security group" -ForegroundColor Cyan
 Write-Host "---------------------------------------" -ForegroundColor Cyan
 
 if ($CreateSecurityGroup) {
-    
+
     $groupSuccess = New-gMSASecurityGroup -GroupName $SecurityGroupName `
                                           -Members $ServerNames `
                                           -OU $SecurityGroupOU `
@@ -803,37 +843,28 @@ if (-not $groupSuccess) {
 }
 
 $createdAccounts = @()
+$stepNumber = 2
 
-if ($EngineAccountName) {
+foreach ($def in $accountDefinitions) {
 
-    Write-Host "`nStep 2: Creating SQL Engine gMSA account" -ForegroundColor Cyan
+    $accountName = $def[0]
+    $accountDesc = $def[1]
+
+    Write-Host "`nStep $stepNumber`: Creating gMSA account '$accountName'" -ForegroundColor Cyan
+    if ($accountDesc) {
+        Write-Host "Description: $accountDesc" -ForegroundColor Gray
+    }
     Write-Host "-----------------------------------------" -ForegroundColor Cyan
 
-    $engineDns = "$($EngineAccountName.TrimEnd('$')).$DnsDomain"
-    $engineSuccess = New-gMSAServiceAccount -AccountName $EngineAccountName `
-                                            -DnsHostName $engineDns `
-                                            -PrincipalsGroup $SecurityGroupName `
-                                            -PasswordInterval $PasswordIntervalDays `
-                                            -Description $EngineAccountDescription
+    $accountDns = "$accountName.$DnsDomain"
+    $accountSuccess = New-gMSAServiceAccount -AccountName $accountName `
+                                             -DnsHostName $accountDns `
+                                             -PrincipalsGroup $SecurityGroupName `
+                                             -PasswordInterval $PasswordIntervalDays `
+                                             -Description $accountDesc
 
-    if ($engineSuccess) { $createdAccounts += $EngineAccountName }
-
-}
-
-if ($AgentAccountName) {
-
-    $stepNumber = if ($EngineAccountName) { "3" } else { "2" }
-    Write-Host "`nStep $stepNumber`: Creating SQL Agent gMSA account" -ForegroundColor Cyan
-    Write-Host "-----------------------------------------" -ForegroundColor Cyan
-
-    $agentDns = "$($AgentAccountName.TrimEnd('$')).$DnsDomain"
-    $agentSuccess = New-gMSAServiceAccount -AccountName $AgentAccountName `
-                                           -DnsHostName $agentDns `
-                                           -PrincipalsGroup $SecurityGroupName `
-                                           -PasswordInterval $PasswordIntervalDays `
-                                           -Description $AgentAccountDescription
-
-    if ($agentSuccess) { $createdAccounts += $AgentAccountName }
+    if ($accountSuccess) { $createdAccounts += $accountName }
+    $stepNumber++
 
 }
 
@@ -850,15 +881,18 @@ if ($createdAccounts.Count -gt 0) {
     Write-Host "`nNext steps:" -ForegroundColor Cyan
     Write-Host "  1. Install gMSA on target servers:" -ForegroundColor White
     Write-Host "     Run separately with admin rights:" -ForegroundColor Yellow
-    $installCommand = ".\security_createGMSA.ps1 -InstallLocally"
-    if ($EngineAccountName) { $installCommand += " -EngineAccountName '$EngineAccountName'" }
-    if ($AgentAccountName) { $installCommand += " -AgentAccountName '$AgentAccountName'" }
-    Write-Host "     $installCommand" -ForegroundColor Gray
+    $installCommand = ".\security_createGMSA.ps1 -InstallLocally -AccountName"
+
+    # Build account list for install command
+    $accountList = "@("
+    $accountList += ($createdAccounts | ForEach-Object { "'$_'" }) -join ","
+    $accountList += ")"
+
+    Write-Host "     $installCommand $accountList" -ForegroundColor Gray
     Write-Host "     Note: Restart system after installation if accounts were just created" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "  2. Configure SQL Server services to use gMSA accounts" -ForegroundColor White
-    Write-Host "     Format: DOMAIN\$account`$" -ForegroundColor Gray
-    Write-Host "  3. Restart SQL Server services" -ForegroundColor White
+    Write-Host "  2. Configure services to use gMSA accounts" -ForegroundColor White
+    Write-Host "     Format: DOMAIN\`$account$" -ForegroundColor Gray
 
 } else {
 
@@ -873,7 +907,7 @@ Write-Log "Operation completed successfully"
 if ($LogPath) {
 
     Write-Host "`nLog file: $LogPath" -ForegroundColor Cyan
-    
+
 }
 
 #endregion
@@ -881,76 +915,45 @@ if ($LogPath) {
 
 <# EXAMPLES
 
+    # ===== EXAMPLE 1: Initialize KDS Root Key (once per Forest) =====
+    .\security_createGMSA.ps1 `
+        -InitializeKDS `
+        -LogPath "C:\Temp\KDS_Init.log"
 
-    # ===== EXAMPLE 1: Minimal Account Creation (existing Security Group) =====
-        .\security_createGMSA.ps1 `
-            -EngineAccountName "g-engine-prod01" `
-            -AgentAccountName "g-agent-prod01" `
-            -SecurityGroupName "SQL_CL_PROD01"
+    # ===== EXAMPLE 2: AlwaysOn - gMSA for 2 Nodes with new Security Group =====
+    .\security_createGMSA.ps1 `
+        -AccountName @( `
+            @("g-LAB22A-oltp", "SQL Server Engine Account for LAB22A"), `
+            @("g-LAB22A-agnt", "SQL Server Agent Account for LAB22A") ) `
+        -SecurityGroupName "SQL_LAB_CL01" `
+        -SecurityGroupDescription "SQL Server Cluster CL01 gMSA Group" `
+        -ServerNames "LAB-NODE01","LAB-NODE02" `
+        -CreateSecurityGroup `
+        -SecurityGroupOU "OU=lab_secgrp,DC=lab,DC=local" `
+        -PasswordIntervalDays 90 `
+        -LogPath "C:\Temp\gMSA_Creation_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
-    # ===== EXAMPLE 2: Engine Account only with new Security Group =====
-        .\security_createGMSA.ps1 `
-            -EngineAccountName "g-engine-dev22a" `
-            -SecurityGroupName "SQL_CL_DEV22A" `
-            -ServerNames "DEV-NODE1","DEV-NODE2" `
-            -CreateSecurityGroup
+    # ===== EXAMPLE 3: SingleNode - gMSA for standalone Server =====
+    .\security_createGMSA.ps1 `
+        -AccountName @( `
+            @("g-DEV22A-oltp", "SQL Server Engine Account for DEV22A"), `
+            @("g-DEV22A-agnt", "SQL Server Agent Account for DEV22A") ) `
+        -SecurityGroupName "SQL_DEV_SRV01" `
+        -SecurityGroupDescription "SQL Server DEV-SRV01 gMSA Group" `
+        -ServerNames "DEV-SRV01" `
+        -CreateSecurityGroup `
+        -LogPath "C:\Temp\gMSA_SingleNode_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
-    # ===== EXAMPLE 3: Complete creation with all options =====
-        .\security_createGMSA.ps1 `
-            -EngineAccountName "g-engine-test" `
-            -AgentAccountName "g-agent-test" `
-            -SecurityGroupName "SQL_CL_test" `
-            -ServerNames "lab-NODE1","lab-NODE2" `
-            -CreateSecurityGroup `
-            -SecurityGroupOU "OU=lab_secgroups,DC=dev,DC=local" `
-            -SecurityGroupDescription "DEV22A SQL Server Cluster gMSA Group" `
-            -EngineAccountDescription "SQL Engine Service Account for DEV22A" `
-            -AgentAccountDescription "SQL Agent Service Account for DEV22A" `
-            -PasswordIntervalDays 90 `
-            -LogPath "C:\Temp\gMSA_Creation_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    # ===== EXAMPLE 4: Install gMSA locally (separate execution, local admin required) =====
+    .\security_createGMSA.ps1 `
+        -InstallLocally `
+        -AccountName "g-LAB22A-oltp","g-LAB22A-agnt" `
+        -LogPath "C:\Temp\gMSA_Install_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
-    # ===== EXAMPLE 4: Initialize KDS Root Key (once per Forest) =====
-        .\security_createGMSA.ps1 `
-            -InitializeKDS `
-            -LogPath "C:\Temp\KDS_Init.log"
-
-    # ===== EXAMPLE 5: Install accounts locally (separate execution, admin rights required) =====
-        .\security_createGMSA.ps1 `
-            -InstallLocally `
-            -EngineAccountName "g-engine-dev22a" `
-            -AgentAccountName "g-agent-dev22a"
-
-    # ===== EXAMPLE 6: Remove accounts from AD =====
-        .\security_createGMSA.ps1 `
-            -DropGmsa `
-            -EngineAccountName "g-engine-test" `
-            -AgentAccountName "g-agent-test" `
-            -LogPath "C:\Temp\gMSA_Remove_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-
-    # ===== EXAMPLE 7: Agent Account only for Standalone Server =====
-        .\security_createGMSA.ps1 `
-            -AgentAccountName "g-agent-standalone01" `
-            -SecurityGroupName "SQL_Standalone_Servers" `
-            -ServerNames "SQL-STANDALONE01" `
-            -CreateSecurityGroup `
-            -SecurityGroupDescription "Standalone SQL Servers for gMSA"
-
-    # ===== EXAMPLE 8: Cluster with 4 nodes and custom password interval =====
-        .\security_createGMSA.ps1 `
-            -EngineAccountName "g-engine-cluster01" `
-            -AgentAccountName "g-agent-cluster01" `
-            -SecurityGroupName "SQL_CL_CLUSTER01" `
-            -ServerNames "SQLNODE1","SQLNODE2","SQLNODE3","SQLNODE4" `
-            -CreateSecurityGroup `
-            -PasswordIntervalDays 180 `
-            -DnsDomain "contoso.com" `
-            -LogPath "C:\Logs\gMSA\Creation_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-
-    # ===== EXAMPLE 09: Account with existing group and specific OU =====
-        .\security_createGMSA.ps1 `
-            -EngineAccountName "g-engine-newinstance" `
-            -SecurityGroupName "SQL_EXISTING_GROUP" `
-            -SecurityGroupOU "OU=ServiceAccounts,OU=Production,DC=corp,DC=local"
-
+    # ===== EXAMPLE 5: Remove gMSA accounts from AD =====
+    .\security_createGMSA.ps1 `
+        -DropGmsa `
+        -AccountName "g-LAB22A-oltp","g-LAB22A-agnt" `
+        -LogPath "C:\Temp\gMSA_Remove_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
 #>
