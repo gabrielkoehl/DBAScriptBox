@@ -35,6 +35,7 @@
     - 02.06.2025 - Init
     - 30.01.2026 - Minor Updates, improved error handling
     - 05.02.2026 - Added logging functionality and examples
+    - 12.02.2026 - -Encoding UTF-16LE --> unicode (PS5 compatibility)
 
     Disclaimer: This script is provided "as is" without warranty of any kind.
                 Use at your own risk. The author assumes no responsibility for
@@ -159,7 +160,7 @@ function Set-UserRights {
             throw "secedit export failed: $exportResult"
         }
 
-        $secpolContent = Get-Content $secpolFile -Raw -Encoding UTF-16LE
+        $secpolContent = Get-Content $secpolFile -Raw -Encoding unicode
         Write-Log "Security policy exported successfully"
 
         foreach ($right in $Rights) {
@@ -233,7 +234,7 @@ function Set-UserRights {
 
         }
 
-        $secpolContent | Set-Content $newSecpolFile -Encoding UTF-16LE
+        $secpolContent | Set-Content $newSecpolFile -Encoding unicode
         Write-Log "Writing modified security policy to: $newSecpolFile"
 
         Write-Host "`nApplying security policies..." -ForegroundColor Cyan
@@ -277,7 +278,7 @@ function Show-CurrentRights {
 
         Write-Log "Checking current rights status for SID: $SID"
         $null       = secedit /export /cfg $secpolFile /areas USER_RIGHTS /quiet
-        $content    = Get-Content $secpolFile -Encoding UTF-16LE
+        $content    = Get-Content $secpolFile -Encoding unicode
 
         Write-Host "`n Right                          Status    " -ForegroundColor Blue
         Write-Host " ----------------------------------------    " -ForegroundColor Blue

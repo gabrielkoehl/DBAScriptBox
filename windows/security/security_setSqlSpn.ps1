@@ -445,7 +445,7 @@ function Set-SPNADPermissions {
                 # Apply the modified ACL
                 Set-Acl -Path "AD:\$($computer.DistinguishedName)" -AclObject $acl
 
-                Write-Host "  ✓ Permissions set successfully" -ForegroundColor Green
+                Write-Host "  Permissions set successfully" -ForegroundColor Green
                 Write-Log "Permissions set successfully on $computerName"
 
                 # Verify
@@ -459,7 +459,7 @@ function Set-SPNADPermissions {
 
             } catch {
 
-                Write-Host "  ✗ Error: $_" -ForegroundColor Red
+                Write-Host "  Error: $_" -ForegroundColor Red
                 Write-Log "Error setting permissions on ${computerName}: $($_.Exception.Message)" -Level "ERROR"
 
             }
