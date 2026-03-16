@@ -19,6 +19,7 @@ Everybody has their own toolbox – if you find something useful here, feel free
 | File | Description | Last Modified |
 |------|-------------|---------------|
 | [solution/snapDiskLatency/](solution/snapDiskLatency/) | Disk performance testing with DISKSPD and latency monitoring | 25/12 |
+| [sqlserver/backup/backup_list_all_backupsets.sql](sqlserver/backup/backup_list_all_backupsets.sql) | Lists recent backup sets per database and highlights overdue or missing backups. | 26/03 |
 | [sqlserver/security/security_list_all_users_on_DB_w_role.sql](sqlserver/security/security_list_all_users_on_DB_w_role.sql) | Lists all database users with their roles | 25/12 |
 | [sqlserver/security/security_list_logins_wServerRole.sql](sqlserver/security/security_list_logins_wServerRole.sql) | Lists all server logins with their server roles (implicit and explicit) | 25/12 |
 | [sqlserver/system/system_buffer_by_db.sql](sqlserver/system/system_buffer_by_db.sql) | Shows buffer cache usage per database | 25/11 |
